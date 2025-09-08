@@ -235,6 +235,46 @@ MIT License
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Disclaimer
+## ⚠️ Legal Disclaimer & LinkedIn Compliance
 
-This package is for educational and legitimate business purposes only. Please respect LinkedIn's terms of service and use responsibly.
+**IMPORTANT: This tool is for educational and legitimate business purposes only.**
+
+### LinkedIn Terms of Service Compliance
+
+This package is designed to be compliant with LinkedIn's Terms of Service by:
+
+- ✅ **Using public search engines** (Google, Bing, etc.) instead of scraping LinkedIn directly
+- ✅ **Respecting rate limits** with built-in delays between requests
+- ✅ **Only accessing publicly available information** through search results
+- ✅ **No automated data collection** from LinkedIn's website
+- ✅ **No circumvention of LinkedIn's technical measures**
+
+### User Responsibilities
+
+Users of this tool are responsible for:
+
+- 🔒 **Complying with LinkedIn's Terms of Service** and all applicable laws
+- 🚫 **Not using this tool for spam, harassment, or unauthorized data collection**
+- ⏱️ **Respecting rate limits** and not overloading search engines
+- 📋 **Obtaining proper permissions** before collecting personal information
+- 🎯 **Using the tool ethically** for legitimate business purposes only
+
+### What This Tool Does NOT Do
+
+- ❌ Does not scrape LinkedIn's website directly
+- ❌ Does not bypass LinkedIn's technical protections
+- ❌ Does not collect data in violation of LinkedIn's ToS
+- ❌ Does not perform automated actions on LinkedIn
+
+### What This Tool Does
+
+- ✅ Uses public search engines to find LinkedIn profile URLs
+- ✅ Provides publicly available profile links
+- ✅ Helps with legitimate networking and business development
+- ✅ Respects search engine rate limits
+
+### Legal Notice
+
+**The authors and contributors of this software are not responsible for any misuse of this tool.** Users must ensure their use complies with all applicable laws, regulations, and terms of service. This tool is provided "as is" without warranty of any kind.
+
+**If you use this tool, you agree to use it responsibly and in compliance with all applicable terms of service and laws.**

@@ -13,7 +13,7 @@ setup(
     version="1.0.0",
     author="AI Assistant",
     author_email="",
-    description="A simple Python package to find LinkedIn profiles using search queries",
+    description="A simple Python package to find LinkedIn profiles using search queries (LinkedIn ToS compliant)",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/linkedin-finder",

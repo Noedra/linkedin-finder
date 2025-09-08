@@ -3,6 +3,11 @@
 LinkedIn Profile Finder
 
 A simple, standalone package to find LinkedIn profiles using search queries.
+
+⚠️ LEGAL DISCLAIMER:
+This tool is for educational and legitimate business purposes only.
+Users must comply with LinkedIn's Terms of Service and all applicable laws.
+The tool uses public search engines and does not scrape LinkedIn directly.
 """
 
 import re
@@ -40,9 +45,14 @@ class LinkedInFinder:
 
         Args:
             delay_between_requests: Delay between search requests in seconds
+                                   (minimum 1.0 recommended for compliance)
         """
-        self.delay_between_requests = delay_between_requests
+        # Ensure minimum delay for compliance
+        self.delay_between_requests = max(delay_between_requests, 1.0)
         self.ddgs = DDGS()
+        
+        # Log compliance notice
+        logger.info("⚠️  LinkedIn Finder: Use responsibly and comply with LinkedIn's ToS")
 
     def clean_name(self, name: str) -> str:
         """Clean and normalize name for search"""

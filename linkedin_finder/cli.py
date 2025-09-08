@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 Command line interface for LinkedIn Finder
+
+⚠️ LEGAL DISCLAIMER:
+This tool is for educational and legitimate business purposes only.
+Users must comply with LinkedIn's Terms of Service and all applicable laws.
 """
 
 import argparse
@@ -27,7 +31,7 @@ def main():
         "--delay",
         type=float,
         default=1.0,
-        help="Delay between requests in seconds (default: 1.0)",
+        help="Delay between requests in seconds (default: 1.0, minimum 1.0 for compliance)",
     )
 
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
