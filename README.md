@@ -1,6 +1,6 @@
 # LinkedIn Finder
 
-A simple Python package to find LinkedIn profiles using search queries. Perfect for quickly finding someone's LinkedIn profile when you know their name and company.
+A simple Python package to find LinkedIn profiles using search queries. Perfect for quickly finding someone's LinkedIn profile when you know their name and company!
 
 ## Features
 
