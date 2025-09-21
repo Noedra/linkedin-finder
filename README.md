@@ -1,11 +1,13 @@
 # LinkedIn Finder
 
-A simple Python package to find LinkedIn profiles using search queries. Perfect for quickly finding someone's LinkedIn profile when you know their name and company!!!
+A powerful Python package to find LinkedIn profiles and extract rich profile information using search queries. Perfect for lead generation, recruitment, and professional networking when you know someone's name and company. Features smart company validation to ensure profile accuracy and comprehensive data extraction including job titles, locations, and bio information.
 
 ## Features
 
 - 🔍 **Simple API**: Just provide a name and company to find LinkedIn profiles
 - 🚀 **Multiple Search Strategies**: Uses various search approaches for better results
+- 📊 **Rich Profile Information**: Extracts job titles, company names, locations, connections, and bio descriptions
+- 🎯 **Smart Company Validation**: Ensures profile accuracy with configurable company matching
 - ⚡ **Fast**: Optimized search queries and result parsing
 - 🛡️ **Respectful**: Built-in rate limiting to be respectful to search engines
 - 📦 **Lightweight**: Minimal dependencies, easy to install and use
@@ -36,18 +38,23 @@ profile_url = find_linkedin_profile("John Smith", "Microsoft")
 print(profile_url)  # https://www.linkedin.com/in/johnsmith123
 ```
 
-### Using the Finder Class
+### Using the Finder Class (Enhanced with Rich Profile Data)
 
 ```python
 from linkedin_finder import LinkedInFinder
 
-finder = LinkedInFinder()
+# Initialize with company validation (default threshold: 0.6)
+finder = LinkedInFinder(company_similarity_threshold=0.6)
 
 # Search with name and company
-result = finder.search_profile("Jane Doe", "Google")
+result = finder.search_profile("Satya Nadella", "Microsoft")
 if result.success:
     print(f"Found: {result.profile_url}")
-    print(f"Title: {result.title}")
+    print(f"Job Title: {result.job_title_extracted}")
+    print(f"Company: {result.company_extracted}")
+    print(f"Location: {result.location}")
+    print(f"Connections: {result.connections}")
+    print(f"Bio: {result.description[:100]}...")
 else:
     print(f"Not found: {result.error}")
 ```
@@ -87,10 +94,14 @@ Main class for finding LinkedIn profiles.
 #### Constructor
 
 ```python
-LinkedInFinder(delay_between_requests: float = 1.0)
+LinkedInFinder(
+    delay_between_requests: float = 1.0,
+    company_similarity_threshold: float = 0.6
+)
 ```
 
 - `delay_between_requests`: Delay between search requests in seconds (default: 1.0)
+- `company_similarity_threshold`: Minimum similarity score (0.0-1.0) for company matching (default: 0.6). Set to 0.0 to disable company validation
 
 #### Methods
 
@@ -123,13 +134,18 @@ Returns a list of `SearchResult` objects.
 
 ### `SearchResult`
 
-Result object containing search results.
+Result object containing search results and extracted profile information.
 
 #### Attributes
 
 - `success: bool` - Whether the search was successful
 - `profile_url: Optional[str]` - LinkedIn profile URL if found
 - `title: Optional[str]` - Profile title from search results
+- `description: Optional[str]` - Full profile description/bio from search results
+- `job_title_extracted: Optional[str]` - Extracted job title (e.g., "CEO", "Software Engineer")
+- `location: Optional[str]` - Geographic location (e.g., "San Francisco", "New York")
+- `connections: Optional[str]` - Connection count (e.g., "500+ connections")
+- `company_extracted: Optional[str]` - Extracted company name
 - `query_used: Optional[str]` - The search query that worked
 - `strategy: Optional[int]` - Which search strategy succeeded
 - `error: Optional[str]` - Error message if search failed
@@ -146,17 +162,22 @@ Simple function for query-based search that returns just the profile URL or None
 
 ## Examples
 
-### Basic Usage
+### Basic Usage with Rich Profile Data
 
 ```python
 from linkedin_finder import LinkedInFinder
 
-finder = LinkedInFinder()
+# Initialize with company validation
+finder = LinkedInFinder(company_similarity_threshold=0.6)
 
 # Search for someone
 result = finder.search_profile("Satya Nadella", "Microsoft")
 if result.success:
     print(f"Found: {result.profile_url}")
+    print(f"Job Title: {result.job_title_extracted}")
+    print(f"Company: {result.company_extracted}")
+    print(f"Location: {result.location}")
+    print(f"Connections: {result.connections}")
 else:
     print("Profile not found")
 ```
@@ -203,6 +224,36 @@ echo "Found profile: $PROFILE"
 
 ## Configuration
 
+### Company Validation
+
+The package includes smart company validation to ensure profile accuracy:
+
+```python
+# Strict company matching (default: 0.6)
+finder = LinkedInFinder(company_similarity_threshold=0.8)
+
+# Moderate company matching
+finder = LinkedInFinder(company_similarity_threshold=0.4)
+
+# Disable company validation
+finder = LinkedInFinder(company_similarity_threshold=0.0)
+```
+
+**How Company Validation Works:**
+- When you specify a company, the system validates that found profiles actually work at that company
+- Profiles without clear company information are rejected when company validation is enabled
+- This prevents returning wrong people with the same name but different employers
+- Company names are normalized (removes "Inc.", "LLC", etc.) for better matching
+
+**Example:**
+```python
+# This will reject profiles that don't clearly show "Apple" as the company
+result = finder.search_profile("Tim Cook", "Apple")
+if not result.success:
+    print("No Apple employee named Tim Cook found")
+    # This is better than returning a random Tim Cook!
+```
+
 ### Rate Limiting
 
 The package includes built-in rate limiting to be respectful to search engines. You can adjust the delay:
@@ -213,19 +264,54 @@ finder = LinkedInFinder(delay_between_requests=2.0)  # 2 second delay
 
 ### Logging
 
-Enable verbose logging to see search progress:
+Enable verbose logging to see search progress and company validation:
 
 ```python
 import logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)  # Use DEBUG to see company matching
 
 finder = LinkedInFinder()
 result = finder.search_profile("John Smith", "Microsoft")
 ```
 
+## Rich Profile Information
+
+The package extracts comprehensive profile information from search results:
+
+### Available Profile Data
+
+- **Job Title**: Current position (e.g., "CEO", "Software Engineer", "Marketing Director")
+- **Company**: Current employer with smart normalization
+- **Location**: Geographic location (city/region)
+- **Connections**: Network size (e.g., "500+ connections")
+- **Bio/Description**: Profile summary and mission statements
+- **Profile URL**: Direct link to LinkedIn profile
+
+### Example Output
+
+```python
+result = finder.search_profile("Satya Nadella", "Microsoft")
+if result.success:
+    print(f"URL: {result.profile_url}")
+    print(f"Job Title: {result.job_title_extracted}")        # "Chairman and CEO"
+    print(f"Company: {result.company_extracted}")            # "Microsoft"
+    print(f"Location: {result.location}")                    # "Redmond"
+    print(f"Connections: {result.connections}")              # "500+ connections"
+    print(f"Bio: {result.description[:100]}...")             # "As chairman and CEO of Microsoft..."
+```
+
+### Information Extraction Process
+
+1. **Search Results Analysis**: Parses title and description from search engines
+2. **Pattern Recognition**: Uses regex patterns to identify job titles, companies, locations
+3. **Data Normalization**: Cleans and standardizes extracted information
+4. **Validation**: Ensures extracted data meets quality standards
+
 ## Dependencies
 
-- `ddgs>=3.0.0` - DuckDuckGo search library
+- `ddgs>=3.0.0` - DuckDuckGo search library for web searches
+- `tqdm` - Progress bars for batch operations
+- `difflib` - Built-in Python library for company name similarity matching
 
 ## License
 

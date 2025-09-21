@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from ddgs import DDGS
 from tqdm import tqdm
+from difflib import SequenceMatcher
 
 # Set up logging
 logging.basicConfig(
@@ -32,6 +33,11 @@ class SearchResult:
     success: bool
     profile_url: Optional[str] = None
     title: Optional[str] = None
+    description: Optional[str] = None
+    job_title_extracted: Optional[str] = None
+    location: Optional[str] = None
+    connections: Optional[str] = None
+    company_extracted: Optional[str] = None
     query_used: Optional[str] = None
     strategy: Optional[int] = None
     error: Optional[str] = None
@@ -40,16 +46,23 @@ class SearchResult:
 class LinkedInFinder:
     """Find LinkedIn profiles using optimized DDGS search"""
 
-    def __init__(self, delay_between_requests: float = 1.0):
+    def __init__(
+        self,
+        delay_between_requests: float = 1.0,
+        company_similarity_threshold: float = 0.6,
+    ):
         """
         Initialize the LinkedIn finder
 
         Args:
             delay_between_requests: Delay between search requests in seconds
                                    (minimum 1.0 recommended for compliance)
+            company_similarity_threshold: Minimum similarity score (0.0-1.0) for company matching
+                                        Set to 0.0 to disable company validation
         """
         # Ensure minimum delay for compliance
         self.delay_between_requests = max(delay_between_requests, 1.0)
+        self.company_similarity_threshold = company_similarity_threshold
         self.ddgs = DDGS()
 
     def clean_name(self, name: str) -> str:
@@ -81,6 +94,145 @@ class LinkedInFinder:
             flags=re.IGNORECASE,
         )
         return company.strip()
+
+    def parse_profile_info(self, title: str, body: str) -> Dict[str, Optional[str]]:
+        """
+        Parse additional profile information from search result title and body
+
+        Args:
+            title: The title from search results
+            body: The body/description from search results
+
+        Returns:
+            Dictionary with extracted information
+        """
+        info = {
+            "job_title_extracted": None,
+            "location": None,
+            "connections": None,
+            "company_extracted": None,
+            "description": body,
+        }
+
+        if not body:
+            return info
+
+        # Extract job title from title (e.g., "John Smith - CEO at Microsoft | LinkedIn")
+        title_match = re.search(r" - ([^|]+) \| LinkedIn", title, re.IGNORECASE)
+        if title_match:
+            job_company = title_match.group(1).strip()
+            # Try to split job title and company (e.g., "CEO at Microsoft")
+            at_match = re.search(r"^(.+?)\s+at\s+(.+)$", job_company, re.IGNORECASE)
+            if at_match:
+                info["job_title_extracted"] = at_match.group(1).strip()
+                info["company_extracted"] = at_match.group(2).strip()
+            else:
+                # Check if the whole thing might be a company name
+                # (e.g., "Microsoft" or "Apple Inc.")
+                if len(job_company.split()) <= 3 and not any(
+                    title_word in job_company.lower()
+                    for title_word in [
+                        "ceo",
+                        "cto",
+                        "cfo",
+                        "president",
+                        "director",
+                        "manager",
+                        "engineer",
+                        "developer",
+                        "analyst",
+                    ]
+                ):
+                    info["company_extracted"] = job_company
+                else:
+                    info["job_title_extracted"] = job_company
+
+        # Extract location (e.g., "Location: Redmond", "Location: Mountain View")
+        location_match = re.search(r"Location:\s*([^·•\n]+)", body, re.IGNORECASE)
+        if location_match:
+            info["location"] = location_match.group(1).strip()
+
+        # Extract connections (e.g., "500+ connections", "1 connection")
+        connections_match = re.search(r"(\d+\+?\s+connections?)", body, re.IGNORECASE)
+        if connections_match:
+            info["connections"] = connections_match.group(1).strip()
+
+        # If we didn't get company from title, try to extract from body
+        if not info["company_extracted"]:
+            # Look for "Experience: CompanyName" or "at CompanyName"
+            exp_match = re.search(r"Experience:\s*([^·•\n]+)", body, re.IGNORECASE)
+            if exp_match:
+                info["company_extracted"] = exp_match.group(1).strip()
+            else:
+                # Look for "at [Company]" pattern in the body
+                at_match = re.search(r"\bat\s+([A-Z][^·•\n,]+)", body)
+                if at_match:
+                    info["company_extracted"] = at_match.group(1).strip()
+
+        return info
+
+    def calculate_company_similarity(self, company1: str, company2: str) -> float:
+        """
+        Calculate similarity between two company names
+
+        Args:
+            company1: First company name
+            company2: Second company name
+
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        if not company1 or not company2:
+            return 0.0
+
+        # Normalize company names for comparison
+        def normalize_company(company: str) -> str:
+            # Convert to lowercase and remove common suffixes
+            company = company.lower().strip()
+            company = re.sub(
+                r"\b(inc\.?|llc|corp\.?|corporation|company|ltd\.?|limited|co\.?)\b",
+                "",
+                company,
+            ).strip()
+            # Remove extra whitespace
+            company = re.sub(r"\s+", " ", company)
+            return company
+
+        norm1 = normalize_company(company1)
+        norm2 = normalize_company(company2)
+
+        # Use SequenceMatcher for similarity
+        similarity = SequenceMatcher(None, norm1, norm2).ratio()
+
+        # Boost score if one company name is contained in the other
+        if norm1 in norm2 or norm2 in norm1:
+            similarity = max(similarity, 0.8)
+
+        return similarity
+
+    def is_company_match(self, expected_company: str, found_company: str) -> bool:
+        """
+        Check if the found company matches the expected company
+
+        Args:
+            expected_company: The company we're searching for
+            found_company: The company found in the search result
+
+        Returns:
+            True if companies match above threshold, False otherwise
+        """
+        if not expected_company or self.company_similarity_threshold <= 0.0:
+            return True  # Skip validation if no expected company or threshold is 0
+
+        if not found_company:
+            return False
+
+        similarity = self.calculate_company_similarity(expected_company, found_company)
+        logger.debug(
+            f"Company similarity: '{expected_company}' vs '{found_company}' = {similarity:.2f}"
+        )
+
+        return similarity >= self.company_similarity_threshold
 
     def generate_search_queries(
         self, name: str, company: str = "", job_title: str = ""
@@ -163,7 +315,9 @@ class LinkedInFinder:
                     )
                 )
 
-                # Look for LinkedIn profiles
+                # Look for LinkedIn profiles and validate company match
+                valid_profiles = []
+
                 for result in results:
                     url = result.get("href", "")
                     if "linkedin.com/in/" in url.lower() and not any(
@@ -176,23 +330,72 @@ class LinkedInFinder:
                             "/feed",
                         ]
                     ):
-                        logger.debug(f"✅ Found profile: {url}")
-                        return SearchResult(
-                            success=True,
-                            profile_url=url,
-                            title=result.get("title", ""),
-                            query_used=query,
-                            strategy=i,
-                        )
+                        # Extract additional information from search results
+                        title = result.get("title", "")
+                        body = result.get("body", "")
+                        parsed_info = self.parse_profile_info(title, body)
+
+                        # Validate company match if we have an expected company
+                        if company:  # We have an expected company to validate against
+                            if parsed_info["company_extracted"]:
+                                # We found a company in the result, check if it matches
+                                if self.is_company_match(
+                                    company, parsed_info["company_extracted"]
+                                ):
+                                    logger.debug(
+                                        f"✅ Found matching profile: {url} (Company: {parsed_info['company_extracted']})"
+                                    )
+                                    valid_profiles.append((result, parsed_info))
+                                else:
+                                    logger.debug(
+                                        f"❌ Company mismatch for {url}: expected '{company}', found '{parsed_info['company_extracted']}'"
+                                    )
+                                    continue
+                            else:
+                                # No company found in result - reject this profile when we expect a company
+                                # This ensures we don't return wrong profiles when company validation is important
+                                logger.debug(
+                                    f"❌ Profile rejected - no company extracted: {url} (expected company: '{company}')"
+                                )
+                                continue
+                        else:
+                            # No company to validate against - accept any LinkedIn profile
+                            logger.debug(f"✅ Found profile: {url}")
+                            valid_profiles.append((result, parsed_info))
+
+                # Return the first valid profile
+                if valid_profiles:
+                    result, parsed_info = valid_profiles[0]
+                    url = result.get("href", "")
+                    title = result.get("title", "")
+
+                    return SearchResult(
+                        success=True,
+                        profile_url=url,
+                        title=title,
+                        description=parsed_info["description"],
+                        job_title_extracted=parsed_info["job_title_extracted"],
+                        location=parsed_info["location"],
+                        connections=parsed_info["connections"],
+                        company_extracted=parsed_info["company_extracted"],
+                        query_used=query,
+                        strategy=i,
+                    )
 
             except Exception as e:
                 logger.debug(f"Strategy {i} failed for {name}: {e}")
                 continue
 
-        logger.debug(f"❌ No LinkedIn profile found for {name}")
+        # Provide more specific error message
+        if company:
+            error_msg = f"No LinkedIn profiles found for {name} at {company}. This could mean: 1) The person doesn't have a LinkedIn profile, 2) The profile isn't indexed by search engines, 3) The company name in their profile doesn't match '{company}' (profiles without clear company information are rejected for accuracy), or 4) Try adjusting the company name or lowering the similarity threshold (currently {self.company_similarity_threshold})"
+        else:
+            error_msg = f"No LinkedIn profiles found for {name}"
+
+        logger.debug(f"❌ {error_msg}")
         return SearchResult(
             success=False,
-            error="No LinkedIn profiles found with any strategy",
+            error=error_msg,
         )
 
     def search_simple(self, query: str) -> SearchResult:
