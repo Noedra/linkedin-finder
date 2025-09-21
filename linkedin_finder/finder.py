@@ -16,10 +16,11 @@ import logging
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from ddgs import DDGS
+from tqdm import tqdm
 
 # Set up logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,6 @@ class LinkedInFinder:
         # Ensure minimum delay for compliance
         self.delay_between_requests = max(delay_between_requests, 1.0)
         self.ddgs = DDGS()
-        
-        # Log compliance notice
-        logger.info("⚠️  LinkedIn Finder: Use responsibly and comply with LinkedIn's ToS")
 
     def clean_name(self, name: str) -> str:
         """Clean and normalize name for search"""
@@ -145,7 +143,7 @@ class LinkedInFinder:
         Returns:
             SearchResult object with success status and profile URL if found
         """
-        logger.info(f"Searching for: {name}" + (f" at {company}" if company else ""))
+        logger.debug(f"Searching for: {name}" + (f" at {company}" if company else ""))
 
         queries = self.generate_search_queries(name, company, job_title)
 
@@ -178,7 +176,7 @@ class LinkedInFinder:
                             "/feed",
                         ]
                     ):
-                        logger.info(f"✅ Found profile: {url}")
+                        logger.debug(f"✅ Found profile: {url}")
                         return SearchResult(
                             success=True,
                             profile_url=url,
@@ -188,10 +186,10 @@ class LinkedInFinder:
                         )
 
             except Exception as e:
-                logger.warning(f"Strategy {i} failed for {name}: {e}")
+                logger.debug(f"Strategy {i} failed for {name}: {e}")
                 continue
 
-        logger.warning(f"❌ No LinkedIn profile found for {name}")
+        logger.debug(f"❌ No LinkedIn profile found for {name}")
         return SearchResult(
             success=False,
             error="No LinkedIn profiles found with any strategy",
@@ -243,8 +241,10 @@ class LinkedInFinder:
 
         results = [None] * len(searches)
         lock = threading.Lock()
+        completed_count = 0
 
-        def process_search(idx: int, search_data: Dict[str, str]) -> None:
+        def process_search(idx: int, search_data: Dict[str, str], pbar: tqdm) -> None:
+            nonlocal completed_count
             try:
                 ddgs_instance = DDGS()  # Create new instance for thread
                 finder = LinkedInFinder(self.delay_between_requests)
@@ -258,21 +258,36 @@ class LinkedInFinder:
 
                 with lock:
                     results[idx] = result
+                    completed_count += 1
+                    pbar.update(1)
+                    # Update description with current search info
+                    name = search_data.get("name", "Unknown")
+                    company = search_data.get("company", "")
+                    desc = f"Searching LinkedIn profiles - Current: {name}"
+                    if company:
+                        desc += f" at {company}"
+                    pbar.set_description(desc)
 
             except Exception as e:
                 with lock:
                     results[idx] = SearchResult(
                         success=False, error=f"Error processing search: {e}"
                     )
+                    completed_count += 1
+                    pbar.update(1)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(process_search, i, search_data)
-                for i, search_data in enumerate(searches)
-            ]
+        # Create progress bar
+        with tqdm(
+            total=len(searches), desc="Searching LinkedIn profiles", unit="profile"
+        ) as pbar:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(process_search, i, search_data, pbar)
+                    for i, search_data in enumerate(searches)
+                ]
 
-            for future in as_completed(futures):
-                future.result()  # Wait for completion
+                for future in as_completed(futures):
+                    future.result()  # Wait for completion
 
         return results
 
