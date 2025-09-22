@@ -41,7 +41,9 @@ def main():
     if args.verbose:
         import logging
 
-        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Also set the linkedin_finder logger to DEBUG for verbose mode
+        logging.getLogger("linkedin_finder.finder").setLevel(logging.DEBUG)
 
     # Create finder instance
     finder = LinkedInFinder(delay_between_requests=args.delay)
