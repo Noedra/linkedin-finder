@@ -425,11 +425,16 @@ class LinkedInFinder:
         return similarity >= self.name_similarity_threshold
 
     def generate_search_queries(
-        self, name: str, company: str = "", job_title: str = ""
+        self,
+        name: str,
+        company: str = "",
+        job_title: str = "",
+        keywords: List[str] = None,
     ) -> List[str]:
         """Generate multiple search query variations"""
         clean_name = self.clean_name(name)
         clean_company = self.clean_company(company)
+        clean_keywords = [kw.strip() for kw in (keywords or []) if kw.strip()]
 
         queries = []
 
@@ -469,10 +474,41 @@ class LinkedInFinder:
                 main_company = company_words[0]  # First word
                 queries.append(f'linkedin "{clean_name}" "{main_company}"')
 
+        # KEYWORD-ENHANCED STRATEGIES (Secondary - used when primary searches may fail)
+        # These are added after primary strategies since keywords are often broader/less specific
+        if clean_keywords:
+            # Strategy 8: Name + keywords (most specific keyword search)
+            for keyword in clean_keywords:
+                queries.append(f'linkedin "{clean_name}" "{keyword}"')
+
+            # Strategy 9: Name + company + keywords (if we have both)
+            if clean_company:
+                for keyword in clean_keywords:
+                    queries.append(
+                        f'linkedin "{clean_name}" "{clean_company}" "{keyword}"'
+                    )
+
+            # Strategy 10: Name + multiple keywords
+            if len(clean_keywords) > 1:
+                keywords_str = " ".join(f'"{kw}"' for kw in clean_keywords)
+                queries.append(f'linkedin "{clean_name}" {keywords_str}')
+
+            # Strategy 11: Broader keyword search (without quotes for more flexibility)
+            for keyword in clean_keywords:
+                queries.append(f"linkedin {clean_name} {keyword}")
+
+            # Strategy 12: Site-specific with keywords
+            for keyword in clean_keywords:
+                queries.append(f'site:linkedin.com/in/ "{clean_name}" {keyword}')
+
         return queries
 
     def search_profile(
-        self, name: str, company: str = "", job_title: str = ""
+        self,
+        name: str,
+        company: str = "",
+        job_title: str = "",
+        keywords: List[str] = None,
     ) -> SearchResult:
         """
         Search for a LinkedIn profile
@@ -481,13 +517,19 @@ class LinkedInFinder:
             name: Person's name (required)
             company: Company name (optional)
             job_title: Job title (optional)
+            keywords: List of domain-specific keywords to enhance search (optional)
+                     These are used as secondary search terms when primary searches fail
 
         Returns:
             SearchResult object with success status and profile URL if found
         """
-        logger.debug(f"Searching for: {name}" + (f" at {company}" if company else ""))
+        logger.debug(
+            f"Searching for: {name}"
+            + (f" at {company}" if company else "")
+            + (f" with keywords: {keywords}" if keywords else "")
+        )
 
-        queries = self.generate_search_queries(name, company, job_title)
+        queries = self.generate_search_queries(name, company, job_title, keywords)
 
         for i, query in enumerate(queries, 1):
             try:
@@ -702,6 +744,7 @@ class LinkedInFinder:
                     search_data.get("name", ""),
                     search_data.get("company", ""),
                     search_data.get("job_title", ""),
+                    search_data.get("keywords", None),
                 )
 
                 with lock:
@@ -742,7 +785,7 @@ class LinkedInFinder:
 
 # Convenience functions for common use cases
 def find_linkedin_profile(
-    name: str, company: str = "", job_title: str = ""
+    name: str, company: str = "", job_title: str = "", keywords: List[str] = None
 ) -> Optional[str]:
     """
     Simple function to find a LinkedIn profile URL
@@ -751,12 +794,13 @@ def find_linkedin_profile(
         name: Person's name
         company: Company name (optional)
         job_title: Job title (optional)
+        keywords: List of domain-specific keywords (optional)
 
     Returns:
         LinkedIn profile URL if found, None otherwise
     """
     finder = LinkedInFinder()
-    result = finder.search_profile(name, company, job_title)
+    result = finder.search_profile(name, company, job_title, keywords)
     return result.profile_url if result.success else None
 
 
