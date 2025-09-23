@@ -7,7 +7,8 @@ A powerful Python package to find LinkedIn profiles and extract rich profile inf
 - 🔍 **Simple API**: Just provide a name and company to find LinkedIn profiles
 - 🚀 **Multiple Search Strategies**: Uses various search approaches for better results
 - 📊 **Rich Profile Information**: Extracts job titles, company names, locations, connections, and bio descriptions
-- 🎯 **Smart Company Validation**: Ensures profile accuracy with configurable company matching
+- 🎯 **Smart Validation**: Dual validation system - both name and company matching to ensure high accuracy
+- 🔒 **Name Validation**: Fuzzy matching validates that found profiles actually belong to the searched person
 - ⚡ **Fast**: Optimized search queries and result parsing
 - 🛡️ **Respectful**: Built-in rate limiting to be respectful to search engines
 - 📦 **Lightweight**: Minimal dependencies, easy to install and use
@@ -96,12 +97,14 @@ Main class for finding LinkedIn profiles.
 ```python
 LinkedInFinder(
     delay_between_requests: float = 1.0,
-    company_similarity_threshold: float = 0.6
+    company_similarity_threshold: float = 0.6,
+    name_similarity_threshold: float = 0.7
 )
 ```
 
 - `delay_between_requests`: Delay between search requests in seconds (default: 1.0)
 - `company_similarity_threshold`: Minimum similarity score (0.0-1.0) for company matching (default: 0.6). Set to 0.0 to disable company validation
+- `name_similarity_threshold`: Minimum similarity score (0.0-1.0) for name matching (default: 0.7). Validates that found profiles match the searched person's name to reduce false positives. Set to 0.0 to disable name validation
 
 #### Methods
 
@@ -146,6 +149,7 @@ Result object containing search results and extracted profile information.
 - `location: Optional[str]` - Geographic location (e.g., "San Francisco", "New York")
 - `connections: Optional[str]` - Connection count (e.g., "500+ connections")
 - `company_extracted: Optional[str]` - Extracted company name
+- `name_extracted: Optional[str]` - Extracted person name from profile (used for validation)
 - `query_used: Optional[str]` - The search query that worked
 - `strategy: Optional[int]` - Which search strategy succeeded
 - `error: Optional[str]` - Error message if search failed
