@@ -52,6 +52,8 @@ class LinkedInFinder:
         delay_between_requests: float = 1.0,
         company_similarity_threshold: float = 0.6,
         name_similarity_threshold: float = 0.7,
+        use_llm_validation: bool = True,
+        groq_api_key: Optional[str] = None,
     ):
         """
         Initialize the LinkedIn finder
@@ -65,12 +67,30 @@ class LinkedInFinder:
                                      Validates that found profiles match the searched person's name
                                      to reduce false positives. Set to 0.0 to disable name validation
                                      (default: 0.7 - optimized for best precision/recall balance)
+            use_llm_validation: Whether to use LLM-based name validation (default: True)
+                              Falls back to traditional validation if LLM is unavailable
+            groq_api_key: Optional Groq API key for LLM validation
+                        If not provided, will try to load from GROQ_API_KEY environment variable
         """
         # Ensure minimum delay for compliance
         self.delay_between_requests = max(delay_between_requests, 1.0)
         self.company_similarity_threshold = company_similarity_threshold
         self.name_similarity_threshold = name_similarity_threshold
+        self.use_llm_validation = use_llm_validation
+        self.groq_api_key = groq_api_key
         self.ddgs = DDGS()
+
+        # Initialize LLM validator if requested
+        self._llm_validator = None
+        if self.use_llm_validation:
+            try:
+                from .llm_validation import get_llm_validator
+
+                self._llm_validator = get_llm_validator(api_key=groq_api_key)
+                logger.debug("LLM validation enabled")
+            except Exception as e:
+                logger.warning(f"Could not initialize LLM validation: {e}")
+                self._llm_validator = None
 
     def clean_name(self, name: str) -> str:
         """Clean and normalize name for search"""
@@ -400,13 +420,16 @@ class LinkedInFinder:
 
         return overall_similarity
 
-    def is_name_match(self, expected_name: str, found_name: str) -> bool:
+    def is_name_match(
+        self, expected_name: str, found_name: str, context: Optional[str] = None
+    ) -> bool:
         """
-        Check if the found name matches the expected name
+        Check if the found name matches the expected name using LLM or traditional validation
 
         Args:
             expected_name: The name we're searching for
             found_name: The name found in the search result
+            context: Optional context (company, job title) for LLM validation
 
         Returns:
             True if names match above threshold, False otherwise
@@ -417,9 +440,30 @@ class LinkedInFinder:
         if not found_name:
             return False
 
+        # Try LLM validation first if available
+        if self._llm_validator and self._llm_validator.available:
+            try:
+                result = self._llm_validator.validate_name_match(
+                    expected_name, found_name, context
+                )
+
+                logger.debug(
+                    f"LLM name validation: '{expected_name}' vs '{found_name}' = "
+                    f"{result.is_match} (confidence: {result.confidence:.2f}, "
+                    f"reasoning: {result.reasoning})"
+                )
+
+                # Always trust LLM decision when available
+                logger.debug(f"Using LLM validation result: {result.is_match}")
+                return result.is_match
+
+            except Exception as e:
+                logger.debug(f"LLM validation failed, falling back: {e}")
+
+        # Fallback to traditional validation
         similarity = self.calculate_name_similarity(expected_name, found_name)
         logger.debug(
-            f"Name similarity: '{expected_name}' vs '{found_name}' = {similarity:.2f}"
+            f"Traditional name similarity: '{expected_name}' vs '{found_name}' = {similarity:.2f}"
         )
 
         return similarity >= self.name_similarity_threshold
@@ -571,8 +615,17 @@ class LinkedInFinder:
                         name_valid = True
                         if self.name_similarity_threshold > 0.0:
                             if parsed_info["name_extracted"]:
+                                # Create context for LLM validation
+                                context = None
+                                if company and parsed_info.get("company_extracted"):
+                                    context = f"Expected company: {company}, Found company: {parsed_info['company_extracted']}"
+                                elif company:
+                                    context = f"Expected company: {company}"
+                                elif parsed_info.get("company_extracted"):
+                                    context = f"Found company: {parsed_info['company_extracted']}"
+
                                 name_valid = self.is_name_match(
-                                    name, parsed_info["name_extracted"]
+                                    name, parsed_info["name_extracted"], context
                                 )
                                 if not name_valid:
                                     logger.debug(
@@ -785,7 +838,12 @@ class LinkedInFinder:
 
 # Convenience functions for common use cases
 def find_linkedin_profile(
-    name: str, company: str = "", job_title: str = "", keywords: List[str] = None
+    name: str,
+    company: str = "",
+    job_title: str = "",
+    keywords: List[str] = None,
+    use_llm_validation: bool = True,
+    groq_api_key: Optional[str] = None,
 ) -> Optional[str]:
     """
     Simple function to find a LinkedIn profile URL
@@ -795,11 +853,15 @@ def find_linkedin_profile(
         company: Company name (optional)
         job_title: Job title (optional)
         keywords: List of domain-specific keywords (optional)
+        use_llm_validation: Whether to use LLM-based name validation (default: True)
+        groq_api_key: Optional Groq API key for LLM validation
 
     Returns:
         LinkedIn profile URL if found, None otherwise
     """
-    finder = LinkedInFinder()
+    finder = LinkedInFinder(
+        use_llm_validation=use_llm_validation, groq_api_key=groq_api_key
+    )
     result = finder.search_profile(name, company, job_title, keywords)
     return result.profile_url if result.success else None
 
