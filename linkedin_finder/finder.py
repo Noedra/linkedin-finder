@@ -38,18 +38,22 @@ class SearchResult:
     location: Optional[str] = None
     connections: Optional[str] = None
     company_extracted: Optional[str] = None
+    name_extracted: Optional[str] = None
     query_used: Optional[str] = None
     strategy: Optional[int] = None
     error: Optional[str] = None
 
 
 class LinkedInFinder:
-    """Find LinkedIn profiles using optimized DDGS search"""
+    """Find LinkedIn profiles using optimized DDGS search with name and company validation"""
 
     def __init__(
         self,
         delay_between_requests: float = 1.0,
         company_similarity_threshold: float = 0.6,
+        name_similarity_threshold: float = 0.7,
+        use_llm_validation: bool = True,
+        groq_api_key: Optional[str] = None,
     ):
         """
         Initialize the LinkedIn finder
@@ -58,12 +62,35 @@ class LinkedInFinder:
             delay_between_requests: Delay between search requests in seconds
                                    (minimum 1.0 recommended for compliance)
             company_similarity_threshold: Minimum similarity score (0.0-1.0) for company matching
-                                        Set to 0.0 to disable company validation
+                                        Set to 0.0 to disable company validation (default: 0.6)
+            name_similarity_threshold: Minimum similarity score (0.0-1.0) for name matching
+                                     Validates that found profiles match the searched person's name
+                                     to reduce false positives. Set to 0.0 to disable name validation
+                                     (default: 0.7 - optimized for best precision/recall balance)
+            use_llm_validation: Whether to use LLM-based name validation (default: True)
+                              Falls back to traditional validation if LLM is unavailable
+            groq_api_key: Optional Groq API key for LLM validation
+                        If not provided, will try to load from GROQ_API_KEY environment variable
         """
         # Ensure minimum delay for compliance
         self.delay_between_requests = max(delay_between_requests, 1.0)
         self.company_similarity_threshold = company_similarity_threshold
+        self.name_similarity_threshold = name_similarity_threshold
+        self.use_llm_validation = use_llm_validation
+        self.groq_api_key = groq_api_key
         self.ddgs = DDGS()
+
+        # Initialize LLM validator if requested
+        self._llm_validator = None
+        if self.use_llm_validation:
+            try:
+                from .llm_validation import get_llm_validator
+
+                self._llm_validator = get_llm_validator(api_key=groq_api_key)
+                logger.debug("LLM validation enabled")
+            except Exception as e:
+                logger.warning(f"Could not initialize LLM validation: {e}")
+                self._llm_validator = None
 
     def clean_name(self, name: str) -> str:
         """Clean and normalize name for search"""
@@ -111,8 +138,12 @@ class LinkedInFinder:
             "location": None,
             "connections": None,
             "company_extracted": None,
+            "name_extracted": None,
             "description": body,
         }
+
+        # Extract name from title first
+        info["name_extracted"] = self.extract_name_from_title(title)
 
         if not body:
             return info
@@ -234,12 +265,220 @@ class LinkedInFinder:
 
         return similarity >= self.company_similarity_threshold
 
+    def normalize_name_for_matching(self, name: str) -> str:
+        """
+        Normalize a name for fuzzy matching comparison
+
+        This function handles various name formats and variations to enable better matching.
+        """
+        if not name:
+            return ""
+
+        # Start with basic cleaning
+        normalized = self.clean_name(name).lower()
+
+        # Remove common punctuation that might appear in names
+        normalized = re.sub(r"[.,;:()\"']", " ", normalized)
+
+        # Handle common name variations and contractions
+        name_replacements = {
+            r"\bmike\b": "michael",
+            r"\bmatt\b": "matthew",
+            r"\btom\b": "thomas",
+            r"\bbob\b": "robert",
+            r"\bbill\b": "william",
+            r"\bdick\b": "richard",
+            r"\bjim\b": "james",
+            r"\bdan\b": "daniel",
+            r"\bdave\b": "david",
+            r"\bchris\b": "christopher",
+            r"\bsteve\b": "steven",
+            r"\bken\b": "kenneth",
+            r"\brich\b": "richard",
+            r"\bron\b": "ronald",
+            r"\btony\b": "anthony",
+            r"\bjoe\b": "joseph",
+            r"\bpat\b": "patrick",
+            r"\bamy\b": "amelia",
+            r"\bliz\b": "elizabeth",
+            r"\bkate\b": "katherine",
+            r"\bsue\b": "susan",
+            r"\bnan\b": "nancy",
+            r"\bbeth\b": "elizabeth",
+        }
+
+        for pattern, replacement in name_replacements.items():
+            normalized = re.sub(pattern, replacement, normalized)
+
+        # Normalize multiple spaces to single spaces
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+
+        return normalized
+
+    def extract_name_from_title(self, title: str) -> str:
+        """
+        Extract the person's name from a LinkedIn search result title
+
+        LinkedIn titles typically follow formats like:
+        - "John Smith - CEO at Microsoft | LinkedIn"
+        - "John Smith | LinkedIn"
+        - "John Smith, PhD - Research Scientist | LinkedIn"
+        """
+        if not title:
+            return ""
+
+        # Remove " | LinkedIn" suffix if present
+        title = re.sub(r"\s*\|\s*linkedin\s*$", "", title, flags=re.IGNORECASE).strip()
+
+        # Extract name before first " - " (job title separator)
+        name_match = re.match(r"^([^-]+?)(?:\s*-\s*.+)?$", title)
+        if name_match:
+            name = name_match.group(1).strip()
+
+            # Remove common suffixes that might be part of the name
+            name = re.sub(
+                r",?\s*(PhD|MD|MBA|MS|BS|BA|Jr\.?|Sr\.?)$",
+                "",
+                name,
+                flags=re.IGNORECASE,
+            )
+
+            return name.strip()
+
+        return title.strip()
+
+    def calculate_name_similarity(self, expected_name: str, found_name: str) -> float:
+        """
+        Calculate similarity between expected name and found name using multiple approaches
+        """
+        if not expected_name or not found_name:
+            return 0.0
+
+        # Normalize both names
+        norm_expected = self.normalize_name_for_matching(expected_name)
+        norm_found = self.normalize_name_for_matching(found_name)
+
+        if not norm_expected or not norm_found:
+            return 0.0
+
+        # Exact match after normalization
+        if norm_expected == norm_found:
+            return 1.0
+
+        # Split into parts for more flexible matching
+        expected_parts = norm_expected.split()
+        found_parts = norm_found.split()
+
+        # Check for exact subset matches (handles middle names, initials, etc.)
+        if len(expected_parts) >= 2 and len(found_parts) >= 2:
+            # Both first and last names must match (order flexible)
+            expected_set = set(expected_parts)
+            found_set = set(found_parts)
+
+            # Check if all expected parts are found (allows for additional middle names)
+            if expected_set.issubset(found_set):
+                return 0.95
+
+            # Check if all found parts are in expected (handles when found name is shorter)
+            if found_set.issubset(expected_set):
+                return 0.95
+
+            # Check if first and last names match (most important parts)
+            if (
+                expected_parts[0] == found_parts[0]
+                and expected_parts[-1] == found_parts[-1]
+            ):
+                return 0.9
+
+            # Check if last names match and first names are similar (handles nicknames)
+            if expected_parts[-1] == found_parts[-1]:
+                first_similarity = SequenceMatcher(
+                    None, expected_parts[0], found_parts[0]
+                ).ratio()
+                if first_similarity >= 0.8:
+                    return 0.85
+
+        # Overall string similarity as fallback
+        overall_similarity = SequenceMatcher(None, norm_expected, norm_found).ratio()
+
+        # Boost if names are very similar (likely same person)
+        if overall_similarity >= 0.85:
+            return overall_similarity
+
+        # Check for initials matching (e.g., "J. Smith" vs "John Smith")
+        if len(expected_parts) >= 2 and len(found_parts) >= 2:
+            # Check if one name uses initials
+            expected_initials = "".join([part[0] for part in expected_parts if part])
+            found_initials = "".join([part[0] for part in found_parts if part])
+
+            # If initials match and at least last name matches
+            if (
+                expected_initials == found_initials
+                and expected_parts[-1] == found_parts[-1]
+            ):
+                return 0.8
+
+        return overall_similarity
+
+    def is_name_match(
+        self, expected_name: str, found_name: str, context: Optional[str] = None
+    ) -> bool:
+        """
+        Check if the found name matches the expected name using LLM or traditional validation
+
+        Args:
+            expected_name: The name we're searching for
+            found_name: The name found in the search result
+            context: Optional context (company, job title) for LLM validation
+
+        Returns:
+            True if names match above threshold, False otherwise
+        """
+        if not expected_name or self.name_similarity_threshold <= 0.0:
+            return True  # Skip validation if no expected name or threshold is 0
+
+        if not found_name:
+            return False
+
+        # Try LLM validation first if available
+        if self._llm_validator and self._llm_validator.available:
+            try:
+                result = self._llm_validator.validate_name_match(
+                    expected_name, found_name, context
+                )
+
+                logger.debug(
+                    f"LLM name validation: '{expected_name}' vs '{found_name}' = "
+                    f"{result.is_match} (confidence: {result.confidence:.2f}, "
+                    f"reasoning: {result.reasoning})"
+                )
+
+                # Always trust LLM decision when available
+                logger.debug(f"Using LLM validation result: {result.is_match}")
+                return result.is_match
+
+            except Exception as e:
+                logger.debug(f"LLM validation failed, falling back: {e}")
+
+        # Fallback to traditional validation
+        similarity = self.calculate_name_similarity(expected_name, found_name)
+        logger.debug(
+            f"Traditional name similarity: '{expected_name}' vs '{found_name}' = {similarity:.2f}"
+        )
+
+        return similarity >= self.name_similarity_threshold
+
     def generate_search_queries(
-        self, name: str, company: str = "", job_title: str = ""
+        self,
+        name: str,
+        company: str = "",
+        job_title: str = "",
+        keywords: List[str] = None,
     ) -> List[str]:
         """Generate multiple search query variations"""
         clean_name = self.clean_name(name)
         clean_company = self.clean_company(company)
+        clean_keywords = [kw.strip() for kw in (keywords or []) if kw.strip()]
 
         queries = []
 
@@ -279,10 +518,41 @@ class LinkedInFinder:
                 main_company = company_words[0]  # First word
                 queries.append(f'linkedin "{clean_name}" "{main_company}"')
 
+        # KEYWORD-ENHANCED STRATEGIES (Secondary - used when primary searches may fail)
+        # These are added after primary strategies since keywords are often broader/less specific
+        if clean_keywords:
+            # Strategy 8: Name + keywords (most specific keyword search)
+            for keyword in clean_keywords:
+                queries.append(f'linkedin "{clean_name}" "{keyword}"')
+
+            # Strategy 9: Name + company + keywords (if we have both)
+            if clean_company:
+                for keyword in clean_keywords:
+                    queries.append(
+                        f'linkedin "{clean_name}" "{clean_company}" "{keyword}"'
+                    )
+
+            # Strategy 10: Name + multiple keywords
+            if len(clean_keywords) > 1:
+                keywords_str = " ".join(f'"{kw}"' for kw in clean_keywords)
+                queries.append(f'linkedin "{clean_name}" {keywords_str}')
+
+            # Strategy 11: Broader keyword search (without quotes for more flexibility)
+            for keyword in clean_keywords:
+                queries.append(f"linkedin {clean_name} {keyword}")
+
+            # Strategy 12: Site-specific with keywords
+            for keyword in clean_keywords:
+                queries.append(f'site:linkedin.com/in/ "{clean_name}" {keyword}')
+
         return queries
 
     def search_profile(
-        self, name: str, company: str = "", job_title: str = ""
+        self,
+        name: str,
+        company: str = "",
+        job_title: str = "",
+        keywords: List[str] = None,
     ) -> SearchResult:
         """
         Search for a LinkedIn profile
@@ -291,27 +561,33 @@ class LinkedInFinder:
             name: Person's name (required)
             company: Company name (optional)
             job_title: Job title (optional)
+            keywords: List of domain-specific keywords to enhance search (optional)
+                     These are used as secondary search terms when primary searches fail
 
         Returns:
             SearchResult object with success status and profile URL if found
         """
-        logger.debug(f"Searching for: {name}" + (f" at {company}" if company else ""))
+        logger.debug(
+            f"Searching for: {name}"
+            + (f" at {company}" if company else "")
+            + (f" with keywords: {keywords}" if keywords else "")
+        )
 
-        queries = self.generate_search_queries(name, company, job_title)
+        queries = self.generate_search_queries(name, company, job_title, keywords)
 
         for i, query in enumerate(queries, 1):
             try:
                 # Apply rate limiting
                 time.sleep(self.delay_between_requests)
 
-                # Search using DDGS
+                # Search using DDGS with specific backends for cleaner results
                 results = list(
                     self.ddgs.text(
                         query=query,
                         max_results=10,
                         region="us-en",
                         safesearch="moderate",
-                        backend="auto",
+                        backend="mullvad_google, yandex",
                     )
                 )
 
@@ -335,18 +611,43 @@ class LinkedInFinder:
                         body = result.get("body", "")
                         parsed_info = self.parse_profile_info(title, body)
 
+                        # Validate name match first (always check if name validation is enabled)
+                        name_valid = True
+                        if self.name_similarity_threshold > 0.0:
+                            if parsed_info["name_extracted"]:
+                                # Create context for LLM validation
+                                context = None
+                                if company and parsed_info.get("company_extracted"):
+                                    context = f"Expected company: {company}, Found company: {parsed_info['company_extracted']}"
+                                elif company:
+                                    context = f"Expected company: {company}"
+                                elif parsed_info.get("company_extracted"):
+                                    context = f"Found company: {parsed_info['company_extracted']}"
+
+                                name_valid = self.is_name_match(
+                                    name, parsed_info["name_extracted"], context
+                                )
+                                if not name_valid:
+                                    logger.debug(
+                                        f"❌ Name mismatch for {url}: expected '{name}', found '{parsed_info['name_extracted']}'"
+                                    )
+                                    continue
+                            else:
+                                # No name found in result - reject this profile when name validation is enabled
+                                logger.debug(
+                                    f"❌ Profile rejected - no name extracted: {url} (expected name: '{name}')"
+                                )
+                                continue
+
                         # Validate company match if we have an expected company
+                        company_valid = True
                         if company:  # We have an expected company to validate against
                             if parsed_info["company_extracted"]:
                                 # We found a company in the result, check if it matches
-                                if self.is_company_match(
+                                company_valid = self.is_company_match(
                                     company, parsed_info["company_extracted"]
-                                ):
-                                    logger.debug(
-                                        f"✅ Found matching profile: {url} (Company: {parsed_info['company_extracted']})"
-                                    )
-                                    valid_profiles.append((result, parsed_info))
-                                else:
+                                )
+                                if not company_valid:
                                     logger.debug(
                                         f"❌ Company mismatch for {url}: expected '{company}', found '{parsed_info['company_extracted']}'"
                                     )
@@ -358,10 +659,30 @@ class LinkedInFinder:
                                     f"❌ Profile rejected - no company extracted: {url} (expected company: '{company}')"
                                 )
                                 continue
-                        else:
-                            # No company to validate against - accept any LinkedIn profile
-                            logger.debug(f"✅ Found profile: {url}")
-                            valid_profiles.append((result, parsed_info))
+
+                        # If we get here, both name and company validations passed
+                        validation_info = []
+                        if (
+                            self.name_similarity_threshold > 0.0
+                            and parsed_info["name_extracted"]
+                        ):
+                            validation_info.append(
+                                f"Name: {parsed_info['name_extracted']}"
+                            )
+                        if company and parsed_info["company_extracted"]:
+                            validation_info.append(
+                                f"Company: {parsed_info['company_extracted']}"
+                            )
+
+                        validation_str = (
+                            f" ({', '.join(validation_info)})"
+                            if validation_info
+                            else ""
+                        )
+                        logger.debug(
+                            f"✅ Found matching profile: {url}{validation_str}"
+                        )
+                        valid_profiles.append((result, parsed_info))
 
                 # Return the first valid profile
                 if valid_profiles:
@@ -378,6 +699,7 @@ class LinkedInFinder:
                         location=parsed_info["location"],
                         connections=parsed_info["connections"],
                         company_extracted=parsed_info["company_extracted"],
+                        name_extracted=parsed_info["name_extracted"],
                         query_used=query,
                         strategy=i,
                     )
@@ -387,10 +709,24 @@ class LinkedInFinder:
                 continue
 
         # Provide more specific error message
+        validation_info = []
+        if self.name_similarity_threshold > 0.0:
+            validation_info.append(
+                f"name validation (threshold: {self.name_similarity_threshold})"
+            )
+        if self.company_similarity_threshold > 0.0:
+            validation_info.append(
+                f"company validation (threshold: {self.company_similarity_threshold})"
+            )
+
+        validation_str = (
+            f" with {' and '.join(validation_info)}" if validation_info else ""
+        )
+
         if company:
-            error_msg = f"No LinkedIn profiles found for {name} at {company}. This could mean: 1) The person doesn't have a LinkedIn profile, 2) The profile isn't indexed by search engines, 3) The company name in their profile doesn't match '{company}' (profiles without clear company information are rejected for accuracy), or 4) Try adjusting the company name or lowering the similarity threshold (currently {self.company_similarity_threshold})"
+            error_msg = f"No LinkedIn profiles found for {name} at {company}{validation_str}. This could mean: 1) The person doesn't have a LinkedIn profile, 2) The profile isn't indexed by search engines, 3) The name/company in their profile doesn't match the search criteria (profiles are validated for accuracy), or 4) Try adjusting the similarity thresholds or search terms"
         else:
-            error_msg = f"No LinkedIn profiles found for {name}"
+            error_msg = f"No LinkedIn profiles found for {name}{validation_str}"
 
         logger.debug(f"❌ {error_msg}")
         return SearchResult(
@@ -427,13 +763,13 @@ class LinkedInFinder:
         return self.search_profile(name, company)
 
     def search_multiple(
-        self, searches: List[Dict[str, str]], max_workers: int = 3
+        self, searches: List[Dict[str, Any]], max_workers: int = 3
     ) -> List[SearchResult]:
         """
         Search for multiple LinkedIn profiles in parallel
 
         Args:
-            searches: List of dicts with 'name', 'company', 'job_title' keys
+            searches: List of dicts with 'name', 'company', 'job_title', 'keywords' keys
             max_workers: Number of parallel workers
 
         Returns:
@@ -450,13 +786,18 @@ class LinkedInFinder:
             nonlocal completed_count
             try:
                 ddgs_instance = DDGS()  # Create new instance for thread
-                finder = LinkedInFinder(self.delay_between_requests)
+                finder = LinkedInFinder(
+                    self.delay_between_requests,
+                    self.company_similarity_threshold,
+                    self.name_similarity_threshold,
+                )
                 finder.ddgs = ddgs_instance
 
                 result = finder.search_profile(
                     search_data.get("name", ""),
                     search_data.get("company", ""),
                     search_data.get("job_title", ""),
+                    search_data.get("keywords", None),
                 )
 
                 with lock:
@@ -497,7 +838,12 @@ class LinkedInFinder:
 
 # Convenience functions for common use cases
 def find_linkedin_profile(
-    name: str, company: str = "", job_title: str = ""
+    name: str,
+    company: str = "",
+    job_title: str = "",
+    keywords: List[str] = None,
+    use_llm_validation: bool = True,
+    groq_api_key: Optional[str] = None,
 ) -> Optional[str]:
     """
     Simple function to find a LinkedIn profile URL
@@ -506,12 +852,17 @@ def find_linkedin_profile(
         name: Person's name
         company: Company name (optional)
         job_title: Job title (optional)
+        keywords: List of domain-specific keywords (optional)
+        use_llm_validation: Whether to use LLM-based name validation (default: True)
+        groq_api_key: Optional Groq API key for LLM validation
 
     Returns:
         LinkedIn profile URL if found, None otherwise
     """
-    finder = LinkedInFinder()
-    result = finder.search_profile(name, company, job_title)
+    finder = LinkedInFinder(
+        use_llm_validation=use_llm_validation, groq_api_key=groq_api_key
+    )
+    result = finder.search_profile(name, company, job_title, keywords)
     return result.profile_url if result.success else None
 
 
