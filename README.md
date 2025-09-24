@@ -199,11 +199,11 @@ Search using a simple query string (e.g., "John Smith Microsoft").
 
 Returns a `SearchResult` object.
 
-##### `search_multiple(searches: List[Dict], max_workers: int = 3) -> List[SearchResult]`
+##### `search_multiple(searches: List[Dict[str, Any]], max_workers: int = 3) -> List[SearchResult]`
 
 Search for multiple profiles in parallel.
 
-- `searches`: List of dictionaries with 'name', 'company', 'job_title', 'keywords' keys
+- `searches`: List of dictionaries with 'name', 'company', 'job_title', 'keywords' keys (keywords should be a List[str])
 - `max_workers`: Number of parallel workers
 
 Returns a list of `SearchResult` objects.

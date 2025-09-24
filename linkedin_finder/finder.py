@@ -763,13 +763,13 @@ class LinkedInFinder:
         return self.search_profile(name, company)
 
     def search_multiple(
-        self, searches: List[Dict[str, str]], max_workers: int = 3
+        self, searches: List[Dict[str, Any]], max_workers: int = 3
     ) -> List[SearchResult]:
         """
         Search for multiple LinkedIn profiles in parallel
 
         Args:
-            searches: List of dicts with 'name', 'company', 'job_title' keys
+            searches: List of dicts with 'name', 'company', 'job_title', 'keywords' keys
             max_workers: Number of parallel workers
 
         Returns:
