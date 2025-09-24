@@ -580,14 +580,14 @@ class LinkedInFinder:
                 # Apply rate limiting
                 time.sleep(self.delay_between_requests)
 
-                # Search using DDGS
+                # Search using DDGS with specific backends for cleaner results
                 results = list(
                     self.ddgs.text(
                         query=query,
                         max_results=10,
                         region="us-en",
                         safesearch="moderate",
-                        backend="auto",
+                        backend="mullvad_google, yandex",
                     )
                 )
 
